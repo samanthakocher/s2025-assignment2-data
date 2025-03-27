@@ -19,6 +19,10 @@ import nltk
 nltk.download('punkt', quiet=True)
 from nltk.tokenize import word_tokenize
 
+# Imports for run_exact_line_deduplication
+import hashlib
+from collections import Counter
+
 
 def run_extract_text_from_html_bytes(html_bytes: bytes) -> str | None:
     # Extract plain text from an HTML byte string, handling various encodings.
@@ -225,7 +229,44 @@ def run_gopher_quality_filter(text: str) -> bool:
 def run_exact_line_deduplication(
     input_files: list[os.PathLike], output_directory: os.PathLike
 ):
-    raise NotImplementedError
+    # Perform exact line deduplication across multiple input files.
+
+    # Ensure output directory exists
+    os.makedirs(output_directory, exist_ok=True)
+
+    # First pass: Count line frequencies
+    line_counter = Counter()
+
+    # Use hash of lines as keys to reduce memory footprint
+    for input_file in input_files:
+        with open(input_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                # Strip whitespace and create hash
+                line_hash = hashlib.md5(line.strip().encode('utf-8')).hexdigest()
+                line_counter[line_hash] += 1
+
+    # Second pass: Write unique lines for each file
+    for input_file in input_files:
+        # Determine output file path
+        output_file = os.path.join(output_directory, os.path.basename(input_file))
+
+        # Collecting unique lines for this file
+        unique_lines = []
+        with open(input_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                # Strip whitespace and create hash
+                stripped_line = line.strip()
+                line_hash = hashlib.md5(stripped_line.encode('utf-8')).hexdigest()
+
+                # only keep line if it appears only once in the entire corpus
+                if line_counter[line_hash] == 1:
+                    unique_lines.append(line)
+
+        # Write unique lines to output file
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.writelines(unique_lines)
+
+    return
 
 
 def run_minhash_deduplication(
