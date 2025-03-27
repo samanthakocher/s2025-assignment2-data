@@ -14,6 +14,11 @@ from langdetect import detect, detect_langs
 # Imports for run_mask_emails
 import re
 
+# Imports for run_gopher_quality_filter
+import nltk
+nltk.download('punkt', quiet=True)
+from nltk.tokenize import word_tokenize
+
 
 def run_extract_text_from_html_bytes(html_bytes: bytes) -> str | None:
     # Extract plain text from an HTML byte string, handling various encodings.
@@ -167,7 +172,54 @@ def run_classify_quality(text: str) -> tuple[Any, float]:
 
 
 def run_gopher_quality_filter(text: str) -> bool:
-    raise NotImplementedError
+    """
+    Apply Gopher quality filters to assess text quality.
+
+    Filters include:
+    1. Document length between 50 and 100,00 words
+    2. Mean word length between 3 and 10 characters
+    3. Less than 30% of lines ending with ellipsis
+    4. At least 80% of words contain an alphabetic character
+    """
+
+    # Tokenize the text into words
+    try:
+        words = word_tokenize(text)
+    except Exception:
+        # Fallback tokenization if NLTK fails
+        words = text.split()
+
+    # Filter 1: Check document length (50-100,000 words)
+    if len(words) < 50 or len(words) > 100000:
+        return False
+    
+    # Filter 2: Check mean word length
+    # Filter out empty strings and non-alphabetic tokens
+    word_lengths = [len(word) for word in words if word.strip() and any(c.isalpha() for c in word)]
+
+    if not word_lengths:
+        return False
+    
+    mean_word_length = sum(word_lengths) / len(word_lengths)
+    if mean_word_length < 3 or mean_word_length > 10:
+        return False
+    
+    # Filter 3: Check lines ending with ellipsis
+    lines = text.split('\n')
+    ellipsis_lines = sum(1 for line in lines if line.strip().endswith('...'))
+
+    if ellipsis_lines / len(lines) > 0.3:
+        return False
+    
+    # Filter 4: Check alphabetic character percentage
+    words_with_alpha = sum(1 for word in words if any(c.isalpha() for c in word))
+    alpha_percentage = words_with_alpha / len(words)
+
+    if alpha_percentage < 0.8:
+        return False
+    
+    # If all filters pass
+    return True
 
 
 def run_exact_line_deduplication(
