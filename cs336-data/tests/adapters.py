@@ -10,8 +10,9 @@ import resiliparse.parse.encoding
 
 # Imports for run_identify_language
 from langdetect import detect, detect_langs
-from typing import Tuple
 
+# Imports for run_mask_emails
+import re
 
 def run_extract_text_from_html_bytes(html_bytes: bytes) -> str | None:
     # Extract plain text from an HTML byte string, handling various encodings.
@@ -72,7 +73,24 @@ def run_identify_language(text: str) -> tuple[Any, float]:
 
 
 def run_mask_emails(text: str) -> tuple[str, int]:
-    raise NotImplementedError
+    # Mask out email addresses in the given text.
+
+    # Comprehensive regex patterns for email addresses
+    # This pattern covers most common email address formats
+    email_pattern = r'\b[A-Za-z0-9._]+@[A-Za-z0-9.-]+\.[A-Z|a-z]{2,}\b'
+
+    # Find all email addresses
+    email_matches = re.findall(email_pattern, text)
+
+    # Replace email addresses with the mask
+    masked_text = re.sub(
+        email_pattern,
+        '|||EMAIL_ADDRESS|||',
+        text
+    )
+
+    # Return masked text and count of masked emails
+    return masked_text, len(email_matches)
 
 
 def run_mask_phone_numbers(text: str) -> tuple[str, int]:
