@@ -4,9 +4,31 @@ from __future__ import annotations
 import os
 from typing import Any
 
+import resiliparse.extract.html2text
+import resiliparse.parse.encoding
 
 def run_extract_text_from_html_bytes(html_bytes: bytes) -> str | None:
-    raise NotImplementedError
+    # Extract plain text from an HTML byte string, handling various encodings.
+    
+    # Try to detect the encoding
+    try:
+        # Attempt to detect encoding using resiliparse
+        detected_encoding = resiliparse.parse.encoding.detect_encoding(html_bytes)
+
+        # If no encoding detected, fallback to UTF-8
+        encoding = detected_encoding or 'utf-8'
+
+        # Decode the byte string using the detected or fallback encoding
+        html_str = html_bytes.decode(encoding, errors='replace')
+    except (UnicodeDecodeError, LookupError):
+
+        # Fallback to UTF-8 with replacement if detection fails
+        html_str = html_bytes.decode('utf-8', errors='replace')
+
+    # Extract plain text using Resiliparse
+    extracted_text = resiliparse.extract.html2text.extract_plain_text(html_str)
+
+    return extracted_text
 
 
 def run_identify_language(text: str) -> tuple[Any, float]:
