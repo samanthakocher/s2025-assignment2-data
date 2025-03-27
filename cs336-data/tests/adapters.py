@@ -132,7 +132,26 @@ def run_mask_phone_numbers(text: str) -> tuple[str, int]:
 
 
 def run_mask_ips(text: str) -> tuple[str, int]:
-    raise NotImplementedError
+    # Mask out IPv4 addresses in the given text.
+
+    # Regex pattern for IPv4 addresses
+    # Matches numbers between 0-255 separated by dots
+    ipv4_pattern = r'\b(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[0-9]|[01]?[0-9][0-9]?)\b'
+    
+    # Find all IP address matches
+    ip_matches = re.findall(ipv4_pattern, text)
+
+    # Find all IP addresses with the mask
+    masked_text = re.sub(
+        ipv4_pattern,
+        '|||IP_ADDRESS|||',
+        text
+    )
+
+    # Count unique matches
+    unique_matches = list(set(ip_matches))
+
+    return masked_text, len(unique_matches)
 
 
 def run_classify_nsfw(text: str) -> tuple[Any, float]:
