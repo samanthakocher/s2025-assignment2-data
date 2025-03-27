@@ -14,6 +14,7 @@ from langdetect import detect, detect_langs
 # Imports for run_mask_emails
 import re
 
+
 def run_extract_text_from_html_bytes(html_bytes: bytes) -> str | None:
     # Extract plain text from an HTML byte string, handling various encodings.
     
@@ -94,7 +95,40 @@ def run_mask_emails(text: str) -> tuple[str, int]:
 
 
 def run_mask_phone_numbers(text: str) -> tuple[str, int]:
-    raise NotImplementedError
+    # Mask out phone numbers in the given text.
+
+    # Comprehensive regex patterns for various US phone number formats
+    phone_patterns = [
+        # Pattern with optional country code and various separators
+        r'(?:\+?1[-.\s]?)?(?:\(?\d{3}\[-.\s]?)?\d{3}[-.\s]?\d{4}\b',
+
+        # Patterns with optional paraentheses, different separators
+        r'\(?[2-9]\d{2}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b',
+
+        # Patterns with explicit county code
+        r'\+1\s*(?:\(?\d{3}\)?[-.\s]?)?\d{3}[-.\s]?\d{4}\b',
+
+        # Patterns with various separators
+        r'\d{3}[.-]\d{3}[.-]\d{4}\b'
+    ]
+
+    # Combine all patterns
+    combined_pattern = '|'.join(phone_patterns)
+
+    # Find all phone number matches
+    phone_matches = re.findall(combined_pattern, text)
+
+    # Replace phone numbers with the mask
+    masked_text = re.sub(
+        combined_pattern,
+        '|||PHONE_NUMBER|||',
+        text
+    )
+
+    # Ensure we count unique matches (flatten potential nested matches)
+    unique_matches = list(set(filter(bool, phone_matches)))
+
+    return masked_text, len(unique_matches)
 
 
 def run_mask_ips(text: str) -> tuple[str, int]:
