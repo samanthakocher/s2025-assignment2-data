@@ -3,9 +3,15 @@ from __future__ import annotations
 
 import os
 from typing import Any
-
+ 
+ # Imports for run_extract_text_from_html_bytes
 import resiliparse.extract.html2text
 import resiliparse.parse.encoding
+
+# Imports for run_identify_language
+from langdetect import detect, detect_langs
+from typing import Tuple
+
 
 def run_extract_text_from_html_bytes(html_bytes: bytes) -> str | None:
     # Extract plain text from an HTML byte string, handling various encodings.
@@ -32,7 +38,37 @@ def run_extract_text_from_html_bytes(html_bytes: bytes) -> str | None:
 
 
 def run_identify_language(text: str) -> tuple[Any, float]:
-    raise NotImplementedError
+    # Identify the main language in a given Unicode string.
+
+    # Handle empty or very short strings
+    if not text or len(text.strip()) < 3:
+        return 'en', 0.0
+    
+    try:
+        # Detect the primary language
+        lang = detect(text)
+
+        # Get detailed language probabilities
+        lang_probs = detect_langs(text)
+
+        # Mapping for specific language codes if needed
+        lang_mapping = {
+            'zh-cn': 'zh',
+            'zh-tw': 'zh'
+        }
+
+        # Apply mapping if exists, otherwise use original
+        mapped_lang = lang_mapping.get(lang, lang)
+
+        # Get the confidence score (first probability in the list)
+        # Ensure the score is between 0 and 1
+        confidence = max(0.0, min(1.0, lang_probs[0].prob))
+
+        return mapped_lang, confidence
+    
+    except Exception:
+        # Fallback to English with low confidence if detection fails
+        return 'en', 0.0
 
 
 def run_mask_emails(text: str) -> tuple[str, int]:
