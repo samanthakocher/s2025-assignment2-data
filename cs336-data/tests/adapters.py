@@ -176,7 +176,23 @@ def run_mask_ips(text: str) -> tuple[str, int]:
 
 
 def run_classify_nsfw(text: str) -> tuple[Any, float]:
-    raise NotImplementedError
+    # Classify whether the given text contains NSFW content.
+
+    # Ensure the model is only loaded once
+    if not hasattr(run_classify_nsfw, 'model'):
+        run_classify_nsfw.model = fasttext.load_model(nsfw_model_path)
+
+    # Preprocess the text (FastText requires lowercase)
+    text = text.lower().strip()
+
+    # Predict using the model
+    predictions = run_classify_nsfw.model.predict(text, k=1)
+
+    # Extract label and confidence
+    label = predictions[0][0].replace('__label__', '')
+    confidence = predictions[1][0]
+
+    return ('nsfw' if label in ['toxic', 'nsfw', 'obscene'] else 'non-nsfw', confidence)
 
 
 def run_classify_toxic_speech(text: str) -> tuple[Any, float]:
