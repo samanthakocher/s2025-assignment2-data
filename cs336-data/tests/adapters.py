@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, List, Tuple
  
  # Imports for run_extract_text_from_html_bytes
 import resiliparse.extract.html2text
@@ -14,6 +14,13 @@ from langdetect import detect, detect_langs
 # Imports for run_mask_emails
 import re
 
+# Imports for run_classify_nsfw
+import fasttext
+
+# Load pre-trained models
+nsfw_model_path = "/Users/samanthakocher/Desktop/ece491b/s2025-assignment2-data/nsfw_model.bin"
+toxic_model_path = "/Users/samanthakocher/Desktop/ece491b/s2025-assignment2-data/toxic_speech_model.bin"
+
 # Imports for run_gopher_quality_filter
 import nltk
 nltk.download('punkt', quiet=True)
@@ -22,6 +29,11 @@ from nltk.tokenize import word_tokenize
 # Imports for run_exact_line_deduplication
 import hashlib
 from collections import Counter
+
+# Imports for run_minhash_deduplication
+import numpy as np
+import unicodedata
+import shutil
 
 
 def run_extract_text_from_html_bytes(html_bytes: bytes) -> str | None:
@@ -164,7 +176,23 @@ def run_mask_ips(text: str) -> tuple[str, int]:
 
 
 def run_classify_nsfw(text: str) -> tuple[Any, float]:
-    raise NotImplementedError
+    # Classify whether the given text contains NSFW content.
+
+    # Ensure the model is only loaded once
+    if not hasattr(run_classify_nsfw, 'model'):
+        run_classify_nsfw.model = fasttext.load_model(nsfw_model_path)
+
+    # Preprocess the text (FastText requires lowercase)
+    text = text.lower().strip()
+
+    # Predict using the model
+    predictions = run_classify_nsfw.model.predict(text, k=1)
+
+    # Extract label and confidence
+    label = predictions[0][0].replace('__label__', '')
+    confidence = predictions[1][0]
+
+    return ('nsfw' if label in ['toxic', 'nsfw', 'obscene'] else 'non-nsfw', confidence)
 
 
 def run_classify_toxic_speech(text: str) -> tuple[Any, float]:
@@ -277,4 +305,112 @@ def run_minhash_deduplication(
     jaccard_threshold: float,
     output_directory: os.PathLike,
 ):
-    raise NotImplementedError
+    # Perform fuzzy document deduplication using minhash and LSH.
+
+    # Ensure output directory exists
+    os.makedirs(output_directory, exist_ok=True)
+
+    # Text normalization helper
+    def normalize_text(text: str) -> str:
+        text = unicodedata.normalize('NFD', text)
+        text = re.sub(r'[\u0300-\u036f]', '', text)
+        text = text.lower()
+        text = re.sub(r'[^\w\s]', '', text)
+        return re.sub(r'\s+', ' ', text).strip()
+    
+    # N-gram generation helper
+    def generate_ngrams(text: str, n: int) -> List[str]:
+        words = text.split()
+        return [' '.join(words[i:i+n]) for i in range(len(words)-n+1)]
+    
+    # Read and normalize input fiels
+    normalized_docs = []
+    for file_path in input_files:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            text = f.read()
+        normalized_docs.append(normalize_text(text))
+
+    # Minhash signature generation
+    def minhash_signature(tokens: set, num_hashes: int) -> np.ndarray:
+        np.random.seed(42)
+        signature = np.full(num_hashes, np.inf)
+        for token in tokens:
+            hash_funcs = [hash(str(token) + str(seed)) for seed in range(num_hashes)]
+            signature = np.minimum(signature, hash_funcs)
+        return signature
+    
+    # Compute minhash signatures
+    signatures = np.array([
+        minhash_signature(set(generate_ngrams(doc, ngrams)), num_hashes)
+        for doc in normalized_docs
+    ])
+
+    # Locality-Sensitive Hashing to find candidate duplicate pairs
+    def lsh_candidate_pairs(signatures: np.ndarray, num_bands: int) -> set:
+        rows_per_band = num_hashes // num_bands
+        candidates = set()
+
+        for band in range(num_bands):
+            start, end = band * rows_per_band, (band + 1) * rows_per_band
+            band_signatures = signatures[:, start:end]
+
+            band_hash_dict = {}
+            for doc_idx, band_sig in enumerate(band_signatures):
+                band_hash = hash(tuple(band_sig))
+                if band_hash in band_hash_dict:
+                    for prev_doc_idx in band_hash_dict[band_hash]:
+                        candidates.add(tuple(sorted((prev_doc_idx, doc_idx))))
+                    if band_hash not in band_hash_dict:
+                        band_hash_dict[band_hash] = []
+                    band_hash_dict[band_hash].append(doc_idx)
+
+        return candidates
+    
+    # Find candidate duplicate pairs
+    candidate_pairs = lsh_candidate_pairs(signatures, num_bands)
+
+    # N-gram Jaccard similarity computation
+    def ngram_jaccard_similarity(doc1: str, doc2: str, n: int) -> float:
+        doc1_ngrams = set(generate_ngrams(doc1, n))
+        doc2_ngrams = set(generate_ngrams(doc2, n))
+
+        intersection = len(doc1_ngrams.intersection(doc2_ngrams))
+        union = len(doc1_ngrams.union(doc2_ngrams))
+
+        return intersection / union if union > 0 else 0.0
+    
+    # Track documents to keep
+    keep_docs = set(range(len(input_files)))
+    removed_docs = set()
+
+    # Verify candidate paris with true Jaccard similarity
+    while candidate_pairs:
+        processed_pairs = set()
+        for doc1_idx, doc2_idx in candidate_pairs:
+            if doc1_idx in keep_docs and doc2_idx in keep_docs:
+                jac_sim = ngram_jaccard_similarity(
+                    normalized_docs[doc1_idx],
+                    normalized_docs[doc2_idx],
+                    ngrams
+                )
+
+                # If similarity exceeds threshold, remove one document
+                if jac_sim >= jaccard_threshold:
+                    input_files_names = [os.path.basename(f) for f in input_files]
+                    to_remove = doc2_idx if input_files_names[doc1_idx] <= input_files_names[doc2_idx] else doc1_idx
+
+                    # Ensure the document is still in keep_docs
+                    if to_remove in keep_docs:
+                        keep_docs.remove(to_remove)
+                        removed_docs.add(to_remove)
+
+                processed_pairs.add((doc1_idx, doc2_idx))
+
+        # Remove processed pairs from candidate pairs
+        candidate_pairs = candidate_pairs - processed_pairs
+
+    # Copy files to output directory, keeping only selected documents
+    for i, input_file in enumerate(input_files):
+        if i in keep_docs:
+            output_file = os.path.join(output_directory, os.path.basename(input_file))
+            shutil.copy2(input_file, output_file)
