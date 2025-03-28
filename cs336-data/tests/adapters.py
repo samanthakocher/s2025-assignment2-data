@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, List, Tuple
+from typing import Any, List, Union
  
  # Imports for run_extract_text_from_html_bytes
 import resiliparse.extract.html2text
@@ -14,7 +14,7 @@ from langdetect import detect, detect_langs
 # Imports for run_mask_emails
 import re
 
-# Imports for run_classify_nsfw
+# Imports for run_classify_nsfw and run_classify_toxic_speech
 import fasttext
 
 # Load pre-trained models
@@ -196,7 +196,23 @@ def run_classify_nsfw(text: str) -> tuple[Any, float]:
 
 
 def run_classify_toxic_speech(text: str) -> tuple[Any, float]:
-    raise NotImplementedError
+    # Classify whether the given text contains toxic speech.
+
+    # Ensure the model is only loaded once
+    if not hasattr(run_classify_toxic_speech, 'model'):
+        run_classify_toxic_speech.model = fasttext.load_model(toxic_model_path)
+
+    # Preprocess the text (FastText requires lowercase)
+    text = text.lower().strip()
+
+    # Predict using the model
+    predictions = run_classify_toxic_speech.model.predict(text, k=1)
+
+    # Extract label and confidence
+    label = predictions[0][0].replace('__label__', '')
+    confidence = predictions[1][0]
+
+    return ('toxic' if label == 'toxic' else 'non-toxic', confidence)
 
 
 def run_classify_quality(text: str) -> tuple[Any, float]:
@@ -312,11 +328,11 @@ def run_minhash_deduplication(
 
     # Text normalization helper
     def normalize_text(text: str) -> str:
-        text = unicodedata.normalize('NFD', text)
-        text = re.sub(r'[\u0300-\u036f]', '', text)
-        text = text.lower()
-        text = re.sub(r'[^\w\s]', '', text)
-        return re.sub(r'\s+', ' ', text).strip()
+        text = unicodedata.normalize('NFD', text) # Decompose characters
+        text = re.sub(r'[\u0300-\u036f]', '', text) # Remove accent marks
+        text = text.lower() # Lowercase
+        text = re.sub(r'[^\w\s]', '', text) # Remove punctuation
+        return re.sub(r'\s+', ' ', text).strip() # Normalize whitespace
     
     # N-gram generation helper
     def generate_ngrams(text: str, n: int) -> List[str]:
@@ -335,7 +351,10 @@ def run_minhash_deduplication(
         np.random.seed(42)
         signature = np.full(num_hashes, np.inf)
         for token in tokens:
-            hash_funcs = [hash(str(token) + str(seed)) for seed in range(num_hashes)]
+            hash_funcs = [
+                hash(str(token) + str(seed))
+                for seed in range(num_hashes)
+            ]
             signature = np.minimum(signature, hash_funcs)
         return signature
     
@@ -346,28 +365,31 @@ def run_minhash_deduplication(
     ])
 
     # Locality-Sensitive Hashing to find candidate duplicate pairs
-    def lsh_candidate_pairs(signatures: np.ndarray, num_bands: int) -> set:
+    def lsh_candidate_pairs(signatures: np.ndarray, num_bands: int) -> Set[Tuple[int, int]]:
         rows_per_band = num_hashes // num_bands
         candidates = set()
 
         for band in range(num_bands):
-            start, end = band * rows_per_band, (band + 1) * rows_per_band
+            start = band * rows_per_band
+            end = (band + 1) * rows_per_band
             band_signatures = signatures[:, start:end]
 
             band_hash_dict = {}
             for doc_idx, band_sig in enumerate(band_signatures):
                 band_hash = hash(tuple(band_sig))
-                if band_hash in band_hash_dict:
-                    for prev_doc_idx in band_hash_dict[band_hash]:
-                        candidates.add(tuple(sorted((prev_doc_idx, doc_idx))))
-                    if band_hash not in band_hash_dict:
-                        band_hash_dict[band_hash] = []
-                    band_hash_dict[band_hash].append(doc_idx)
+
+                if band_hash not in band_hash_dict:
+                    band_hash_dict[band_hash] = []
+                band_hash_dict[band_hash].append(doc_idx)
+
+            # For each band hash with multiple documents, add all pairs as candidates
+            for doc_indices in band_hash_dict.values():
+                if len(doc_indices) > 1:
+                    for i in range(len(doc_indices)):
+                        for j in range(i + 1, len(doc_indices)):
+                            candidates.add(tuple(sorted((doc_indices[i], doc_indices[j]))))
 
         return candidates
-    
-    # Find candidate duplicate pairs
-    candidate_pairs = lsh_candidate_pairs(signatures, num_bands)
 
     # N-gram Jaccard similarity computation
     def ngram_jaccard_similarity(doc1: str, doc2: str, n: int) -> float:
@@ -381,7 +403,9 @@ def run_minhash_deduplication(
     
     # Track documents to keep
     keep_docs = set(range(len(input_files)))
-    removed_docs = set()
+
+    # Find candidate duplicate pairs
+    candidate_pairs = lsh_candidate_pairs(signatures, num_bands)
 
     # Verify candidate paris with true Jaccard similarity
     while candidate_pairs:
@@ -397,17 +421,19 @@ def run_minhash_deduplication(
                 # If similarity exceeds threshold, remove one document
                 if jac_sim >= jaccard_threshold:
                     input_files_names = [os.path.basename(f) for f in input_files]
-                    to_remove = doc2_idx if input_files_names[doc1_idx] <= input_files_names[doc2_idx] else doc1_idx
+                    to_remove = (
+                        doc2_idx if input_files_names[doc1_idx] <= input_files_names[doc2_idx]
+                        else doc1_idx
+                    )
 
                     # Ensure the document is still in keep_docs
                     if to_remove in keep_docs:
                         keep_docs.remove(to_remove)
-                        removed_docs.add(to_remove)
 
                 processed_pairs.add((doc1_idx, doc2_idx))
 
         # Remove processed pairs from candidate pairs
-        candidate_pairs = candidate_pairs - processed_pairs
+        candidate_pairs -= processed_pairs
 
     # Copy files to output directory, keeping only selected documents
     for i, input_file in enumerate(input_files):
