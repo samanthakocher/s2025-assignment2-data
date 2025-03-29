@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any, List, Union
+from typing import Any, List
  
  # Imports for run_extract_text_from_html_bytes
 import resiliparse.extract.html2text
@@ -25,6 +25,9 @@ toxic_model_path = "/Users/samanthakocher/Desktop/ece491b/s2025-assignment2-data
 import nltk
 nltk.download('punkt', quiet=True)
 from nltk.tokenize import word_tokenize
+
+# Imports for run_classify_quality
+import string
 
 # Imports for run_exact_line_deduplication
 import hashlib
@@ -216,7 +219,109 @@ def run_classify_toxic_speech(text: str) -> tuple[Any, float]:
 
 
 def run_classify_quality(text: str) -> tuple[Any, float]:
-    raise NotImplementedError
+    # Classify text quality and return label and confidence
+    
+    # Clean the text for processing
+    clean_text = re.sub(r'[^\w\s]', '', text.lower())
+    clean_text_no_punct = re.sub(r'[^\w\s]', '', text)
+
+    # Tokenize text
+    words = clean_text.split()
+    sentences = re.split(r'[.!?]+\s+', text)
+    sentences = [s for s in sentences if s.strip()]
+
+    if not words or not sentences:
+        return "cc", 0.9
+
+    # Feature calculations
+    avg_word_length = sum(len(word) for word in words) / len(words) if words else 0
+    avg_sentence_length = len(words) / len(sentences) if sentences else 0
+    lexical_diversity = len(set(words)) / len(words) if words else 0
+    long_word_ratio = sum(1 for word in words if len(word) > 6) / len(words) if words else 0
+
+    # Connector and stopword checks
+    connectors = {'however', 'moreover', 'furthermore', 'nevertheless', 'consequently', 'therefore', 'thus', 'hence'}
+    connector_ratio = sum(1 for word in words if word.lower() in connectors) / len(words) if words else 0
+
+    stop_words = {'a', 'an', 'the', 'and', 'but', 'if', 'or', 'because', 'as', 'until', 'while', 'of', 'at', 'by',
+                  'for', 'with', 'about', 'against', 'between', 'into', 'through', 'during', 'before', 'after',
+                  'above', 'below', 'to', 'from', 'up', 'down', 'in', 'out', 'on', 'off', 'over', 'under', 'again',
+                  'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why', 'how', 'all', 'any', 'both',
+                  'each', 'few', 'more', 'most', 'other', 'some', 'such', 'no', 'nor', 'not', 'only', 'own', 'same',
+                  'so', 'than', 'too', 'very', 'can', 'will', 'just', 'should', 'now', 'i', 'me', 'my', 'myself',
+                  'we', 'our', 'ours', 'ourselves', 'you', 'your', 'yours', 'yourself', 'yourselves', 'he', 'him',
+                  'his', 'himself', 'she', 'her', 'hers', 'herself', 'it', 'its', 'itself', 'they', 'them', 'their',
+                  'theirs', 'themselves'}
+    stopword_ratio = sum(1 for word in words if word.lower() in stop_words) / len(words) if words else 0
+
+    # Additional quality indicators
+    paragraphs = [p for p in text.split('\n') if p.strip()]
+    avg_paragraph_length = sum(len(p.split()) for p in paragraphs) / len(paragraphs) if paragraphs else 0
+    capital_ratio = sum(1 for char in text if char.isupper()) / len(text) if text else 0
+    symbol_chars = set('@#$%^&*()_+[]{}|;:,.<>?`~')
+    symbol_ratio = sum(1 for char in text if char in symbol_chars) / len(text) if text else 0
+
+    # Quality scoring with adjusted weights
+    quality_score = (
+        min(avg_word_length / 7, 1) * 0.1 +
+        min(avg_sentence_length / 25, 1) * 0.1 +
+        lexical_diversity * 0.25 +  # Increased from 0.2
+        (1 - stopword_ratio) * 0.05 +
+        min(avg_paragraph_length / 50, 1) * 0.1 +
+        min(max(capital_ratio, 0.01), 0.1) / 0.1 * 0.05 +
+        (1 - min(symbol_ratio * 10, 1)) * 0.05 +
+        long_word_ratio * 0.15 +
+        connector_ratio * 0.2  # Increased from 0.15
+    )
+
+    # Academic content indicators boost
+    academic_patterns = [
+        r'(?:cited|quoted|referenced|according to|et al\.|ibid\.|op\. cit\.|cf\.|see|source)',
+        r'(?:study|research|analysis|investigation|experiment)\s+(?:found|showed|demonstrated|indicated)',
+        r'(?:fig\.|figure|table|eq\.|equation|theorem|lemma|corollary)',
+        r'(?:hypothesis|theory|framework|methodology|results)'
+    ]
+    academic_matches = sum(1 for pattern in academic_patterns if re.search(pattern, text, re.IGNORECASE))
+    if academic_matches > 0:
+        quality_score *= min(1 + (academic_matches * 0.1), 1.4)
+
+    # Simplistic language patterns penalty
+    simplistic_patterns = [
+        r'(?:(?:this|that|these|those)\s+(?:is|are)\s+(?:good|bad|great|terrible))',
+        r'(?:very|really|extremely|incredibly|absolutely)\s+(?:good|bad|great|terrible)'
+    ]
+    simplistic_matches = sum(1 for pattern in simplistic_patterns if re.search(pattern, text, re.IGNORECASE))
+    if simplistic_matches > 0:
+        quality_score *= 0.8
+
+    # Penalty for excessive repetition
+    if re.search(r'(.{10,50}?)\1{2,}', text):
+        quality_score *= 0.5
+
+    # Special check for very short texts - likely to be low quality
+    if len(words) < 50:
+        quality_score *= 0.7
+
+    # Boost for longer texts (often higher quality)
+    if len(words) > 300:
+        quality_score *= min(1 + (len(words) / 2000), 1.2)
+
+    # Ensure quality_score is between 0 and 1
+    quality_score = max(0.0, min(1.0, quality_score))
+
+    # Classification and confidence
+    classification_threshold = 0.6  # Lowered from 0.65
+    is_high_quality = quality_score > classification_threshold
+
+    # Calculate confidence based on distance from decision boundary
+    confidence = min(abs(quality_score - classification_threshold) * 2.5, 1.0)
+
+    # Special case: very high or very low scores get high confidence
+    if quality_score > 0.9 or quality_score < 0.3:
+        confidence = max(confidence, 0.9)
+
+    # Return "wiki" for high-quality text, "cc" for low-quality text
+    return "wiki" if is_high_quality else "cc", confidence
 
 
 def run_gopher_quality_filter(text: str) -> bool:
